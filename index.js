@@ -1,111 +1,264 @@
 const express = require('express');
-const sql = require('mssql');
 const cors = require('cors');
+const sql = require('mssql');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+// Root page with service info
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>SQL Executor Service</title>
+      <meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #2563eb; }
+        .status { background: #dcfce7; border: 1px solid #86efac; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .status.error { background: #fee2e2; border-color: #fca5a5; }
+        code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+        .endpoint { background: #f9fafb; padding: 10px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #2563eb; }
+      </style>
+    </head>
+    <body>
+      <h1>🚀 SQL Executor Service</h1>
+      <div class="status">
+        <strong>✅ Сервис работает!</strong><br>
+        Время запуска: ${new Date().toLocaleString()}
+      </div>
+      
+      <h2>Доступные эндпоинты:</h2>
+      
+      <div class="endpoint">
+        <strong>POST /test</strong><br>
+        Проверка подключения к MS SQL Server
+      </div>
+      
+      <div class="endpoint">
+        <strong>POST /execute</strong><br>
+        Выполнение SQL запросов
+      </div>
+      
+      <div class="endpoint">
+        <strong>POST /check-table</strong><br>
+        Проверка существования таблицы
+      </div>
+      
+      <div class="endpoint">
+        <strong>GET /health</strong><br>
+        Проверка работоспособности сервиса
+      </div>
+      
+      <p>Для использования в приложении Excel Importer укажите URL этого сервиса в настройках.</p>
+    </body>
+    </html>
+  `);
+});
 
-function createDbConfig(connection) {
-  const config = {
-    server: connection.server || connection.host || 'localhost',
-    database: connection.database || 'master',
-    user: connection.user || connection.username || 'sa',
-    password: connection.password || '',
-    port: connection.port || 1433,
-    options: {
-      encrypt: connection.encrypt !== false,
-      trustServerCertificate: connection.trustServerCertificate !== false
-    }
-  };
-  return config;
-}
+// CORS preflight for all endpoints
+app.options('/health', cors());
+app.options('/execute', cors());
+app.options('/test', cors());
+app.options('/check-table', cors());
 
-async function executeQuery(connection, query, params = []) {
-  const config = createDbConfig(connection);
-  let pool = null;
-  try {
-    pool = await sql.connect(config);
-    const request = pool.request();
-    params.forEach((param, index) => {
-      request.input(`param${index}`, param);
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Execute SQL query
+app.post('/execute', async (req, res) => {
+  const { server, database, username, password, query, options = {} } = req.body;
+
+  if (!server || !database || !username || !password || !query) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: server, database, username, password, query'
     });
-    const result = await request.query(query);
-    return {
-      success: true,
-      data: result.recordset || [],
-      rowsAffected: result.rowsAffected ? result.rowsAffected[0] : 0
-    };
-  } catch (error) {
-    return { success: false, error: error.message, code: error.code };
-  } finally {
-    if (pool) await pool.close();
   }
-}
 
-async function checkTable(connection, tableName) {
-  const config = createDbConfig(connection);
+  const config = {
+    server,
+    database,
+    user: username,
+    password,
+    options: {
+      encrypt: options.encrypt !== false,
+      trustServerCertificate: options.trustServerCertificate === true,
+      ...options
+    },
+    connectionTimeout: options.connectionTimeout || 30000,
+    requestTimeout: options.requestTimeout || 30000
+  };
+
   let pool = null;
+
   try {
     pool = await sql.connect(config);
-    const checkQuery = `SELECT COUNT(*) as count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = @tableName`;
-    const checkResult = await pool.request().input('tableName', sql.VarChar, tableName).query(checkQuery);
-    const exists = checkResult.recordset[0].count > 0;
     
-    if (!exists) return { success: true, exists: false, message: `Table '${tableName}' not found` };
+    const result = await pool.request().query(query);
     
-    const countResult = await pool.request().query(`SELECT COUNT(*) as count FROM [${tableName}]`);
-    const structureResult = await pool.request().input('tableName', sql.VarChar, tableName).query(`
-      SELECT COLUMN_NAME as name, DATA_TYPE as type, IS_NULLABLE as isNullable, CHARACTER_MAXIMUM_LENGTH as maxLength
-      FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @tableName ORDER BY ORDINAL_POSITION
-    `);
-    
-    return {
+    res.json({
       success: true,
-      exists: true,
-      rowCount: countResult.recordset[0].count,
-      columns: structureResult.recordset
-    };
+      recordset: result.recordset,
+      rowsAffected: result.rowsAffected,
+      recordsets: result.recordsets
+    });
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('SQL Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code,
+      originalError: error.originalError?.message
+    });
   } finally {
-    if (pool) await pool.close();
+    if (pool) {
+      await pool.close();
+    }
   }
-}
+});
 
-async function testConnection(connection) {
-  const config = createDbConfig(connection);
+// Test connection
+app.post('/test', async (req, res) => {
+  const { server, database, username, password, options = {} } = req.body;
+
+  if (!server || !database || !username || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: server, database, username, password'
+    });
+  }
+
+  const config = {
+    server,
+    database,
+    user: username,
+    password,
+    options: {
+      encrypt: options.encrypt !== false,
+      trustServerCertificate: options.trustServerCertificate === true,
+      ...options
+    },
+    connectionTimeout: options.connectionTimeout || 15000
+  };
+
   let pool = null;
+
   try {
     pool = await sql.connect(config);
     const result = await pool.request().query('SELECT @@VERSION as version');
-    return { success: true, message: 'Connected', serverVersion: result.recordset[0].version };
+    
+    res.json({
+      success: true,
+      message: 'Connection successful',
+      version: result.recordset[0]?.version
+    });
   } catch (error) {
-    return { success: false, error: error.message };
+    console.error('Connection Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code
+    });
   } finally {
-    if (pool) await pool.close();
+    if (pool) {
+      await pool.close();
+    }
   }
-}
-
-app.get('/', (req, res) => {
-  res.json({ status: 'ok', service: 'SQL Executor', version: '1.0.0', timestamp: new Date().toISOString() });
 });
 
-app.post('/test', async (req, res) => {
-  const result = await testConnection(req.body.connection);
-  res.json(result);
-});
-
-app.post('/execute', async (req, res) => {
-  const result = await executeQuery(req.body.connection, req.body.query, req.body.params);
-  res.json(result);
-});
-
+// Check if table exists
 app.post('/check-table', async (req, res) => {
-  const result = await checkTable(req.body.connection, req.body.tableName);
-  res.json(result);
+  const { server, database, username, password, tableName, options = {} } = req.body;
+
+  if (!server || !database || !username || !password || !tableName) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields'
+    });
+  }
+
+  const config = {
+    server,
+    database,
+    user: username,
+    password,
+    options: {
+      encrypt: options.encrypt !== false,
+      trustServerCertificate: options.trustServerCertificate === true,
+      ...options
+    },
+    connectionTimeout: options.connectionTimeout || 15000
+  };
+
+  let pool = null;
+
+  try {
+    pool = await sql.connect(config);
+    
+    const existsResult = await pool.request()
+      .input('tableName', sql.NVarChar, tableName)
+      .query(`
+        SELECT COUNT(*) as count 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_NAME = @tableName
+      `);
+    
+    const exists = existsResult.recordset[0]?.count > 0;
+    
+    if (!exists) {
+      return res.json({
+        success: true,
+        exists: false,
+        rowCount: 0,
+        columns: []
+      });
+    }
+
+    const countResult = await pool.request()
+      .query(`SELECT COUNT(*) as count FROM [${tableName}]`);
+    
+    const rowCount = countResult.recordset[0]?.count || 0;
+
+    const columnsResult = await pool.request()
+      .input('tableName', sql.NVarChar, tableName)
+      .query(`
+        SELECT 
+          COLUMN_NAME as name,
+          DATA_TYPE as type,
+          IS_NULLABLE as nullable,
+          CHARACTER_MAXIMUM_LENGTH as maxLength
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = @tableName
+        ORDER BY ORDINAL_POSITION
+      `);
+
+    res.json({
+      success: true,
+      exists: true,
+      rowCount,
+      columns: columnsResult.recordset
+    });
+  } catch (error) {
+    console.error('Check table Error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code
+    });
+  } finally {
+    if (pool) {
+      await pool.close();
+    }
+  }
 });
 
-app.listen(PORT, () => console.log(`SQL Executor on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`SQL Executor Service running on port ${PORT}`);
+});
