@@ -1,1 +1,12 @@
-{"statusCode":404,"reason":"\u001b[91mhandleGetRequest\u001b[0m is not found in \u001b[95m\u001b[1mEntity:U4suzm5WBsSoPFG9yB50anton\u001b[0m","errorType":"NotFoundError","success":false}
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["node", "index.js"]
