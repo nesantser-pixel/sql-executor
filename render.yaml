@@ -1,1 +1,11 @@
-{"statusCode":404,"reason":"\u001b[91mhandleGetRequest\u001b[0m is not found in \u001b[95m\u001b[1mEntity:w8Gc7xNiKB1VwMz0bW40anton\u001b[0m","errorType":"NotFoundError","success":false}
+services:
+  - type: web
+    name: sql-executor
+    env: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
