@@ -1,1 +1,14 @@
-{"statusCode":404,"reason":"\u001b[91mhandleGetRequest\u001b[0m is not found in \u001b[95m\u001b[1mEntity:SdY8VKvZVyQonlGkJHR0anton\u001b[0m","errorType":"NotFoundError","success":false}
+{
+  "name": "sql-executor",
+  "version": "1.0.0",
+  "description": "SQL Executor Service for MS SQL Server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "mssql": "^9.1.1"
+  }
+}
